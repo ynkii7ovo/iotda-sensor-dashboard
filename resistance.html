@@ -5,15 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>电阻系统 · IoTDA 传感器看板</title>
   <link rel="stylesheet" href="style.css?v=baff49711105">
-  <link rel="stylesheet" href="resistance.css?v=7cec06cefe9d">
+  <link rel="stylesheet" href="resistance.css?v=e7beb3cbcc9a">
 </head>
 <body class="resistance-page">
   <main class="page-shell">
     <header class="topbar">
-      <div><p class="eyebrow">ER21T / ER81C · IOTDA</p><h1>电阻统计数据</h1><p class="subhead">按设备、通道和北京时间查看上报的统计窗口；不新增实时曲线。</p></div>
+      <div><p class="eyebrow">ER21T / ER81C · IOTDA</p><h1 id="rModelTitle">ER81C · 电阻统计数据</h1><p class="subhead">两个型号独立查看，保留各自原始统计值与历史记录。</p></div>
       <div class="status-pill" role="status"><span class="status-dot"></span><span id="rStatus">等待数据</span></div>
     </header>
     <nav class="system-navigation" aria-label="系统入口"><a class="button secondary" href="index.html">水分 / 蒸腾系统</a><a class="button primary" href="resistance.html" aria-current="page">电阻系统</a></nav>
+    <section class="model-panel card" aria-label="电阻型号选择">
+      <nav class="model-navigation" aria-label="选择电阻板型号">
+        <a class="button primary" href="resistance.html?model=ER81C" data-model="ER81C" aria-current="page">ER81C · 8 通道 <span>0</span></a>
+        <a class="button secondary" href="resistance.html?model=ER21T" data-model="ER21T">ER21T · 2 通道 <span>0</span></a>
+        <a class="button secondary" href="resistance.html?model=unclassified" data-model="unclassified">身份待核对 <span>0</span></a>
+      </nav>
+      <p class="hint" id="rModelHint">筛选、导出和删除只作用于当前型号；切换不会清空记录。按钮数字为各型号本机归档条数。</p>
+    </section>
     <section class="toolbar card" aria-label="电阻数据操作">
       <div class="toolbar-main">
         <label class="button secondary file-button" for="rFile">导入电阻 JSON / CSV</label><input id="rFile" type="file" accept=".json,.jsonl,.csv,.txt" hidden>
@@ -24,7 +32,7 @@
         <button id="rDelete" class="button danger" type="button" disabled>删除勾选数据</button>
         <button id="rDeleteFiltered" class="button danger secondary" type="button" disabled>删除当前筛选数据</button>
       </div>
-      <p id="rHint" class="hint" role="status">只读取 sensor_data/resistance/；本机归档与水分、蒸腾分开保存。没有内置示例数据。</p>
+      <p id="rHint" class="hint" role="status">先选择型号，再点“从华为云刷新”。兼容旧平铺目录与新的型号子目录，读取全部分页历史，不设置最新条数上限。本机缓存与水分、蒸腾分开。</p>
       <p id="rError" class="error-message" role="alert" hidden></p>
       <div id="rDeleteConfirm" class="delete-confirm" role="alertdialog" aria-labelledby="rDeleteMessage" hidden><p id="rDeleteMessage"></p><div class="toolbar-main"><button id="rConfirmDelete" class="button danger" type="button">确认删除本机缓存</button><button id="rCancelDelete" class="button secondary" type="button">取消删除</button></div></div>
     </section>
@@ -35,22 +43,23 @@
       <article class="stat-card"><span>最新上报时间</span><strong id="rLatest">—</strong><small>北京时间</small></article>
     </section>
     <section class="filters card" aria-label="电阻筛选条件">
-      <div class="filter-field"><label for="rDevice">设备</label><select id="rDevice"><option value="__all__">全部设备</option></select></div>
+      <div class="filter-field"><label for="rDevice">当前型号设备</label><select id="rDevice"><option value="__all__">当前型号全部设备</option></select></div>
       <div class="filter-field sensor-filter"><label for="rChannel">通道（可多选）</label><select id="rChannel" multiple size="4" aria-describedby="rChannelHint"></select><small id="rChannelHint" class="filter-hint">不选表示全部；按住 Ctrl 可多选</small></div>
       <div class="filter-field"><label for="rRange">时间范围</label><select id="rRange"><option value="all">全部历史</option><option value="1h">最新记录前 1 小时</option><option value="24h">最新记录前 24 小时</option><option value="7d">最新记录前 7 天</option></select></div>
       <div class="filter-field"><label for="rFrom">开始时间（北京时间）</label><input id="rFrom" type="datetime-local" step="1"></div>
       <div class="filter-field"><label for="rTo">结束时间（北京时间）</label><input id="rTo" type="datetime-local" step="1"></div>
-      <div class="filter-field"><label for="rReset">筛选操作</label><button id="rReset" class="button secondary" type="button" aria-label="重置筛选">重置筛选</button></div>
+      <div class="filter-field"><label for="rReset">筛选操作</label><button id="rReset" class="button secondary" type="button" aria-label="重置当前型号筛选">重置本型号筛选</button></div>
     </section>
     <section class="table-card card" aria-label="电阻统计历史">
       <div class="card-heading"><div><h2>通道统计历史</h2><p>单位 Ω；样本数为 0 的通道以“—”表示未采样。各统计量沿用网关上报，不合并或重算。</p></div><span class="table-count" id="rTableCount">0 条</span></div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="可横向滚动的电阻统计表">
         <table><thead><tr><th><input id="rSelectAll" type="checkbox" aria-label="勾选当前筛选的全部电阻记录"></th><th>设备</th><th>通道</th><th>上报时间（北京时间）</th><th>样本数</th><th>均值（Ω）</th><th>中位数（Ω）</th><th>最小值（Ω）</th><th>最大值（Ω）</th><th>标准差（Ω）</th><th>序号</th></tr></thead><tbody id="rTable"><tr><td colspan="11" class="muted">尚无电阻数据。请从华为云刷新或导入电阻文件；上报周期由对应网关决定。</td></tr></tbody></table>
       </div>
+      <div class="table-pagination"><button class="button secondary" id="rPrevPage" type="button" disabled>上一页</button><span id="rPageInfo" class="hint" role="status">第 1 / 1 页</span><button class="button secondary" id="rNextPage" type="button" disabled>下一页</button></div>
       <p class="hint">优先使用消息上报时间，缺失时使用 OBS 对象时间。删除仅影响本机电阻归档；再次从云端读取可恢复，云端原始文件不变。</p>
     </section>
     <footer class="footer">云端：sensor-1 / sensor_data/resistance/ · 本页面不含设备密钥，不会向云端写入数据。</footer>
   </main>
-  <script src="resistance-data.js?v=85f347866e99"></script><script src="resistance-app.js?v=b471fb12eb9f"></script>
+  <script src="resistance-data.js?v=80650e9cb14b"></script><script src="resistance-app.js?v=903796a9d5ce"></script>
 </body>
 </html>

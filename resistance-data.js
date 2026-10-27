@@ -32,6 +32,22 @@
     const text = String(value || "未知设备");
     return text.match(/((?:ER21T|ER81C)[-_]\d+)$/i)?.[1].replace("_", "-").toUpperCase() || text;
   }
+  function deviceModel(value) {
+    return String(value || "").match(/(?:^|_)(ER21T|ER81C)[-_]\d+$/i)?.[1].toUpperCase() || "unknown";
+  }
+  function modelOf(row) {
+    const cloud = deviceModel(row.deviceId || row.device_id), board = deviceModel(row.device);
+    if (row.identityIssue || cloud !== "unknown" && board !== "unknown" && cloud !== board) return "conflict";
+    return cloud !== "unknown" ? cloud : board;
+  }
+  // 目录名只用于缩小下载范围，不能替代消息内的设备身份。
+  function objectModel(key) {
+    return String(key).match(/(?:^|[/_])(ER21T|ER81C)(?=[-_/])/i)?.[1].toUpperCase() || "unknown";
+  }
+  function matchesModel(row, model) {
+    const actual = modelOf(row);
+    return !model || model === "__all__" || (model === "unclassified" ? ["unknown", "conflict"].includes(actual) : actual === model);
+  }
   function normalise(row) {
     const time = dateOf(row.time || row.timestamp || row.beijing_time);
     const deviceId = String(row.deviceId || row.device_id || row.device || "未知设备");
@@ -39,11 +55,12 @@
     const channelNumber = String(row.channel || "").match(/(?:ch[_-]?|通道)?(\d+)$/i)?.[1];
     if (!time || !channelNumber) return null;
     const n = finite(row.sampleCount ?? row.sample_count ?? row.n);
-    const record = { time, systemId: "resistance", device, deviceId,
+    const record = { time, systemId: "resistance", device, deviceId, identityIssue: String(row.identityIssue || ""),
       channel: `CH${String(Number(channelNumber)).padStart(2, "0")}`,
       sampleCount: n !== null && Number.isInteger(n) && n >= 0 ? n : null,
       seq: row.seq ?? row.sample_seq ?? "", messageId: String(row.messageId || row.message_id || ""),
       sourceKey: String(row.sourceKey || row.source_key || ""), unit: "ohm" };
+    record.model = modelOf(record);
     fields.forEach((key, i) => { record[key] = finite(row[key] ?? row[wireFields[i]]); });
     // n=0 是未采样，不能把原始占位值显示为测得的0Ω。
     if (record.sampleCount === 0) fields.forEach((key) => { record[key] = null; });
@@ -70,14 +87,17 @@
       if (Array.isArray(node)) { node.forEach((item) => { if (typeof item === "object" || typeof item === "string") visit(item, context, depth + 1); }); return; }
       if (!node || typeof node !== "object") return;
       const header = node.header && typeof node.header === "object" ? node.header : {};
-      const merged = { ...context, time: timeOf(node, context.time),
-        deviceId: node.object_device_id || node.device_id || header.device_id || context.deviceId,
+      const authenticatedDeviceId = context.authenticatedDeviceId || header.device_id || "";
+      const declaredDeviceId = node.object_device_id || node.device_id;
+      const merged = { ...context, time: timeOf(node, context.time), authenticatedDeviceId,
+        deviceId: authenticatedDeviceId || declaredDeviceId || context.deviceId,
+        identityIssue: context.identityIssue || (authenticatedDeviceId && declaredDeviceId && authenticatedDeviceId !== declaredDeviceId ? "cloud-device-mismatch" : ""),
         messageId: node.message_id || header.message_id || context.messageId,
         sourceKey: node.sourceKey || node.source_key || context.sourceKey };
       if (node.content !== undefined && node.id && !/^(?:ER21T|ER81C)[-_]\d+$/i.test(String(node.id))) merged.messageId = String(node.id);
       if (node.channel && (node.systemId === "resistance" || node.system_id === "resistance") &&
           (Object.hasOwn(node, "meanOhm") || Object.hasOwn(node, "mean_ohm"))) {
-        const item = normalise({ ...node, time: timeOf(node, merged.time), sourceKey: node.sourceKey || merged.sourceKey });
+        const item = normalise({ ...node, time: timeOf(node, merged.time), identityIssue: node.identityIssue || merged.identityIssue, sourceKey: node.sourceKey || merged.sourceKey });
         if (item) rows.push(item); return;
       }
       if (Array.isArray(node.mean_ohm) && Array.isArray(node.n)) {
@@ -85,7 +105,7 @@
         // 保持实际统计，不重算均值/中位数/标准差，也不生成额外通道。
         for (let i = 0; i < count; i += 1) {
           const item = normalise({ time: merged.time, device: node.id || displayDevice(merged.deviceId),
-            deviceId: merged.deviceId || node.id, channel: `CH${i + 1}`, sampleCount: node.n[i],
+            deviceId: merged.deviceId || node.id, identityIssue: merged.identityIssue, channel: `CH${i + 1}`, sampleCount: node.n[i],
             seq: node.seq, messageId: merged.messageId, sourceKey: merged.sourceKey,
             ...Object.fromEntries(fields.map((key, j) => [key, node[wireFields[j]]?.[i] ?? null])) });
           if (item) rows.push(item);
@@ -93,7 +113,7 @@
         return;
       }
       // notify_data的header与body为同级，先把header身份带入body/content。
-      const childContext = { ...merged, deviceId: header.device_id || merged.deviceId };
+      const childContext = { ...merged };
       Object.entries(node).forEach(([key, value]) => {
         if (key !== "header" && (value && typeof value === "object" || typeof value === "string" && ["content", "message", "data", "payload", "body"].includes(key))) visit(value, childContext, depth + 1);
       });
@@ -122,7 +142,7 @@
         deviceId: first("设备ID", "device_id", "deviceId"), channel: first("通道", "channel"),
         sampleCount: first("样本数", "sample_count", "sampleCount", "n"),
         ...Object.fromEntries(fields.map((key, i) => [key, first(metricLabels[i], wireFields[i], key)])),
-        seq: first("序号", "seq"), messageId: first("消息ID", "messageId"), sourceKey: first("来源对象", "sourceKey") || context.sourceKey || "" };
+        seq: first("序号", "seq"), messageId: first("消息ID", "messageId"), identityIssue: first("身份问题", "identityIssue"), sourceKey: first("来源对象", "sourceKey") || context.sourceKey || "" };
     }));
   }
   function parseText(text, context = {}, fallback = null) {
@@ -140,9 +160,9 @@
     return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${String(new Date(time).getMilliseconds()).padStart(3, "0")}`;
   }
   function csv(rows) {
-    const headers = ["北京时间", "设备", "设备ID", "通道", "样本数", ...metricLabels, "序号", "消息ID", "来源对象", "单位"];
+    const headers = ["北京时间", "设备", "设备ID", "通道", "样本数", ...metricLabels, "序号", "消息ID", "来源对象", "单位", "型号", "身份问题"];
     const cells = [headers, ...rows.map((r) => [beijing(r.time), r.device, r.deviceId, r.channel, r.sampleCount,
-      ...fields.map((key) => r[key]), r.seq, r.messageId, r.sourceKey, "ohm"])];
+      ...fields.map((key) => r[key]), r.seq, r.messageId, r.sourceKey, "ohm", modelOf(r), r.identityIssue || ""])];
     const quoted = (cell) => {
       let text = String(cell ?? "");
       // 对外部设备名/来源文本防止Excel公式注入；合法负数测量仍保留数值。
@@ -152,7 +172,7 @@
     return "sep=,\r\n" + cells.map((row) => row.map(quoted).join(",")).join("\r\n");
   }
   function filter(rows, options = {}) {
-    let result = rows.filter((r) => (!options.device || options.device === "__all__" || r.deviceId === options.device) &&
+    let result = rows.filter((r) => matchesModel(r, options.model) && (!options.device || options.device === "__all__" || r.deviceId === options.device) &&
       (!options.channels?.length || options.channels.includes(r.channel)));
     const from = dateOf(options.from), to = dateOf(options.to);
     if (from || to) result = result.filter((r) => (!from || +r.time >= +from) && (!to || +r.time <= +to + (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(options.to) ? 59999 : 0)));
@@ -163,5 +183,5 @@
     }
     return result.sort((a, b) => +a.time - +b.time || a.device.localeCompare(b.device) || a.channel.localeCompare(b.channel));
   }
-  return { fields, wireFields, finite, dateOf, normalise, identity, unique, parse, parseCsv, parseText, beijing, csv, filter };
+  return { fields, wireFields, finite, dateOf, normalise, identity, unique, parse, parseCsv, parseText, beijing, csv, filter, deviceModel, modelOf, objectModel, matchesModel };
 });

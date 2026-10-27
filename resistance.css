@@ -1,6 +1,14 @@
 .resistance-page [hidden] { display: none !important; }
 .system-navigation { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
 .system-navigation a { text-decoration: none; }
+.resistance-page .model-panel { padding: 18px 20px; margin-bottom: 18px; }
+.model-navigation { display: flex; flex-wrap: wrap; gap: 10px; }
+.model-navigation a { text-decoration: none; }
+.model-navigation span { border-radius: 12px; padding: 1px 8px; background: #ffffff30; font-size: 12px; }
+.model-navigation a[aria-disabled="true"] { opacity: .65; cursor: wait; }
+.model-navigation a:focus-visible { outline: 3px solid #668fea; outline-offset: 3px; }
+.resistance-page .identity-warning { display: block; color: #9f263b; }
+.resistance-page .table-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .resistance-page .error-message { color: #9f263b; background: #fff0f2; border-radius: 8px; padding: 10px 12px; margin-top: 10px; overflow-wrap: anywhere; }
 .resistance-page .delete-confirm { border: 1px solid #e6bbc3; background: #fff7f8; border-radius: 10px; padding: 12px; margin-top: 12px; }
 .resistance-page .delete-confirm p { margin: 0 0 10px; color: #8b3042; }
