@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IoTDA 传感器看板</title>
+  <link rel="stylesheet" href="style.css?v=baff49711105">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LAN GATEWAY · IOTDA</p>
+        <h1>传感器数据看板</h1>
+        <p class="subhead">查看水分、蒸腾系统的历史数据，也可以导入云端 JSON/CSV。电阻统计请进入独立的电阻系统。</p>
+      </div>
+      <div class="status-pill"><span class="status-dot"></span><span id="dataStatus">等待数据</span></div>
+    </header>
+
+    <nav aria-label="系统入口" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px"><a class="button primary" href="index.html" aria-current="page" style="text-decoration:none">水分 / 蒸腾系统</a><a class="button secondary" href="resistance.html" style="text-decoration:none">电阻系统</a></nav>
+
+    <section class="toolbar card" aria-label="数据操作">
+      <div class="toolbar-main">
+        <label class="button secondary file-button" for="dataFile">导入并归档 JSON / CSV</label>
+        <input id="dataFile" type="file" accept=".json,.csv,.txt,application/json,text/csv" hidden>
+        <button class="button secondary" id="loadArchive" type="button">读取本机归档</button>
+        <button class="button primary" id="loadCloud" type="button">从华为云刷新</button>
+        <button class="button danger" id="deleteFiltered" type="button">删除当前筛选数据</button>
+        <button class="button danger" id="deleteSelected" type="button" disabled>删除勾选数据</button>
+        <button class="button danger secondary" id="clearArchive" type="button">清空本机归档</button>
+        <button class="button secondary" id="exportCsv" type="button">导出当前筛选表格（CSV）</button>
+        <button class="button secondary" id="exportJson" type="button">导出当前筛选 JSON</button>
+      </div>
+      <p class="hint" id="sourceHint">当前没有加载真实数据；导入后会自动追加保存到本机浏览器归档。导出按钮只导出当前板卡、传感器和时间范围筛选结果。</p>
+    </section>
+
+    <section class="stats-grid" aria-label="数据概览">
+      <article class="stat-card"><span>已归档数据点</span><strong id="statPoints">0</strong><small>完整传感器记录（含序号）</small></article>
+      <article class="stat-card"><span>设备数</span><strong id="statDevices">0</strong><small>网关下的子设备</small></article>
+      <article class="stat-card"><span>通道数</span><strong id="statChannels">0</strong><small>cap_01 到 cap_10</small></article>
+      <article class="stat-card"><span>最后时间</span><strong id="statLatest">—</strong><small>归档中的最新一条</small></article>
+    </section>
+
+    <section class="mapping-strip card" aria-label="传感器编号规则">
+      <strong>统一编号规则</strong>
+      <span><b>001–010</b> · capnode-001</span>
+      <span><b>011–020</b> · capnode-002</span>
+      <span><b>021–030</b> · capnode-003</span>
+      <small>例如：capnode-002 的 cap_01 = sensor_011</small>
+    </section>
+
+    <section class="filters card" aria-label="筛选条件">
+      <div class="filter-field"><label for="systemSelect">系统</label><select id="systemSelect"><option value="__all__">全部系统</option></select></div>
+      <div class="filter-field"><label for="deviceSelect">设备</label><select id="deviceSelect"><option value="__all__">全部设备</option></select></div>
+      <div class="filter-field"><label for="sensorTypeSelect">传感器类型</label><select id="sensorTypeSelect"><option value="__all__">全部类型</option><option value="moisture">水分</option><option value="humidity">湿度</option></select></div>
+      <div class="filter-field sensor-filter"><label for="channelSelect">全局传感器编号（可多选）</label><select id="channelSelect" multiple size="5" aria-describedby="channelHint"></select><small id="channelHint" class="filter-hint">不选表示全部；按住 Ctrl 可多选</small></div>
+      <div class="filter-field"><label for="rangeSelect">时间范围</label><select id="rangeSelect"><option value="all">全部</option><option value="1h">最近 1 小时</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></div>
+      <div class="filter-field"><label for="fromTime">自定义开始时间（北京时间）</label><input id="fromTime" type="datetime-local" step="1"></div>
+      <div class="filter-field"><label for="toTime">自定义结束时间（北京时间）</label><input id="toTime" type="datetime-local" step="1"></div>
+      <div class="filter-field grow"><label for="chartMode">显示方式</label><select id="chartMode"><option value="auto">自动（单通道按设备）</option><option value="all">全部通道叠加</option></select></div>
+    </section>
+
+    <section class="chart-card card">
+      <div class="card-heading"><div><h2>趋势折线图</h2><p id="chartCaption">请先加载数据</p></div><span class="legend-note">每条线代表一个设备 / 通道</span></div>
+      <div class="chart-wrap"><canvas id="trendChart" aria-label="传感器趋势折线图"></canvas><div class="empty-state" id="emptyState">还没有数据<br><small>点击“从华为云刷新”，也可导入 OBS 导出的 JSON/CSV 文件</small></div></div>
+      <div class="legend" id="legend" aria-label="图例"></div>
+    </section>
+
+    <section class="table-card card">
+      <div class="card-heading"><div><h2>历史数据</h2><p>显示当前筛选范围内的全部记录；刷新云端不会重复保存同一个对象</p></div><span class="table-count" id="tableCount">0 条</span></div>
+      <div class="table-scroll"><table><thead><tr><th>选择</th><th>系统</th><th>类型</th><th>全局编号</th><th>板卡</th><th>原始通道</th><th>数值</th><th>时间</th><th>序号</th></tr></thead><tbody id="latestTable"><tr><td colspan="9" class="muted">暂无数据</td></tr></tbody></table></div>
+    </section>
+
+    <footer class="footer">云端数据来自华为云 OBS；点击“从华为云刷新”查看。导入、筛选和删除仅影响当前浏览器，不会删除云端原始数据。</footer>
+  </main>
+  <script src="app.js?v=faecf7dfc641"></script>
+</body>
+</html>
