@@ -23,3 +23,10 @@
 .resistance-page .button:focus-visible, .system-navigation a:focus-visible { outline: 3px solid #668fea; outline-offset: 3px; }
 .resistance-page .muted { white-space: normal; padding: 28px 15px; }
 @media (max-width: 480px) { .resistance-page #rLatest { font-size: 16px; } .resistance-page .stats-grid .stat-card { min-height: 105px; } }
+.dual-board-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:16px 0; }
+.dual-board-card { padding:20px; min-width:0; }
+.dual-board-card h2 { margin:6px 0 12px; }
+.dual-board-card p { overflow-wrap:anywhere; }
+.dual-board-card strong { color:#2452bc; font-size:1.2rem; }
+@media(max-width:640px) { .dual-board-grid { grid-template-columns:1fr; } }
+.resistance-page .board-meta { display:block; color:#657791; font-size:11px; }

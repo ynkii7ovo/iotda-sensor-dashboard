@@ -2,12 +2,14 @@
   "use strict";
   const D = window.ResistanceData, $ = (id) => document.getElementById(id);
   const ENDPOINT = "https://sensor-1.obs.cn-east-3.myhuaweicloud.com";
-  const PREFIX = "sensor_data/resistance/", DB = "iotda-resistance-archive", STORE = "windows";
+  const DUAL_PAGE = document.body.dataset.view === "dual";
+  const PREFIX = DUAL_PAGE ? "sensor_data/resistance/ER81C-DUAL-01/" : "sensor_data/resistance/";
+  const DB = "iotda-resistance-archive", STORE = "windows";
   const initialModel = new URLSearchParams(location.search).get("model");
   const PAGE_SIZE = 100;
   const state = { rows: [], filtered: [], selected: new Set(), pendingDelete: [], busy: false, page: 1,
-    model: ["ER81C", "ER21T", "unclassified"].includes(initialModel) ? initialModel : "ER81C" };
-  const modelLabel = (model = state.model) => model === "unclassified" ? "身份待核对" : model;
+    model: DUAL_PAGE ? "ER81C-DUAL" : ["ER81C", "ER21T", "unclassified"].includes(initialModel) ? initialModel : "ER81C" };
+  const modelLabel = (model = state.model) => model === "unclassified" ? "身份待核对" : model === "ER81C-DUAL" ? "ER81C 双板 EE / EF" : model;
   const modelRows = () => state.rows.filter((row) => D.matchesModel(row, state.model));
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   const number = (value) => value === null ? "—" : Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 6 });
@@ -43,17 +45,25 @@
   async function deleteRows(keys) {
     const db = await openArchive();
     try { await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, "readwrite"); keys.forEach((key) => tx.objectStore(STORE).delete(key));
+      const wanted = new Set(keys), tx = db.transaction(STORE, "readwrite"), store = tx.objectStore(STORE);
+      // 历史缓存可能在双板识别前写入；按逻辑身份定位实际存储键，不覆盖或删除另一块板。
+      const request = store.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result; if (!cursor) return;
+        const row = D.normalise(cursor.value);
+        if (row && wanted.has(D.identity(row))) cursor.delete();
+        cursor.continue();
+      };
       tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
     }); } finally { db.close(); }
     state.rows = await readArchive(); updateSelects(); render();
   }
   function updateSelects() {
     const device = $("rDevice").value, channels = [...$("rChannel").selectedOptions].map((o) => o.value);
-    const scopedRows = modelRows(), devices = new Map(scopedRows.map((r) => [r.deviceId, r.device]));
-    $("rDevice").innerHTML = '<option value="__all__">当前型号全部设备</option>' + [...devices].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => `<option value="${escape(id)}">${escape(name)}</option>`).join("");
+    const scopedRows = modelRows(), devices = new Map(scopedRows.map((r) => [D.entity(r), D.deviceLabel(r)]));
+    $("rDevice").innerHTML = `<option value="__all__">${DUAL_PAGE ? "EE / EF 全部板卡" : "当前型号全部设备"}</option>` + [...devices].sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => `<option value="${escape(id)}">${escape(name)}</option>`).join("");
     if (devices.has(device)) $("rDevice").value = device;
-    const scoped = scopedRows.filter((r) => $("rDevice").value === "__all__" || r.deviceId === $("rDevice").value);
+    const scoped = scopedRows.filter((r) => $("rDevice").value === "__all__" || D.entity(r) === $("rDevice").value);
     $("rChannel").innerHTML = [...new Set(scoped.map((r) => r.channel))].sort().map((ch) => `<option value="${escape(ch)}">${escape(ch)}</option>`).join("");
     [...$("rChannel").options].forEach((option) => { option.selected = channels.includes(option.value); });
   }
@@ -87,8 +97,17 @@
     $("rModelHint").textContent = state.model === "unclassified" ? "这些记录的型号未知，或云端设备身份与消息内容不一致，未计入 ER81C / ER21T。请核对原文件与网关配置。" :
       `当前只查看 ${state.model}，设备、通道、时间筛选、导出和删除均仅作用于本型号。切换型号不会清空任何记录。`;
     $("rCount").textContent = rows.length.toLocaleString("zh-CN");
-    $("rDevices").textContent = new Set(rows.map((r) => r.deviceId)).size;
-    $("rChannels").textContent = new Set(rows.map((r) => r.deviceId + "|" + r.channel)).size;
+    $("rDevices").textContent = new Set(rows.map(D.entity)).size;
+    $("rChannels").textContent = new Set(rows.map((r) => D.entity(r) + "|" + r.channel)).size;
+    if (DUAL_PAGE) {
+      $("rModelHint").textContent = "EE、EF 各 8 通道，独立保留原始统计；筛选、导出和本机删除均按板卡区分。";
+      for (const suffix of ["EE", "EF"]) {
+        const scoped = rows.filter((r) => D.boardOf(r.device)?.id === `ER81C-${suffix}`);
+        const latestBoard = scoped.reduce((max, r) => Math.max(max, +r.time), -Infinity);
+        $(`rBoard${suffix}Count`).textContent = `${scoped.length.toLocaleString("zh-CN")} 条通道记录`;
+        $(`rBoard${suffix}Latest`).textContent = scoped.length ? `最新上报：${D.beijing(latestBoard).slice(0, 19)}` : "当前筛选中暂无归档数据";
+      }
+    }
     $("rLatest").textContent = rows.length ? D.beijing(latest).slice(0, 19) : "—";
     $("rTableCount").textContent = `${modelLabel()}：${rows.length} 条 / 本型号归档 ${modelRows().length} 条`;
     $("rDeleteFiltered").disabled = state.busy || rows.length === 0;
@@ -104,7 +123,7 @@
     $("rPrevPage").disabled = state.page <= 1; $("rNextPage").disabled = state.page >= pages;
     $("rTable").innerHTML = rows.length ? visible.map((r) =>
       `<tr><td><input class="r-check" type="checkbox" data-key="${encodeURIComponent(D.identity(r))}"${state.selected.has(D.identity(r)) ? " checked" : ""} aria-label="勾选 ${escape(r.device)} ${escape(r.channel)} ${escape(D.beijing(r.time))}"></td>` +
-      `<td title="${escape(r.deviceId)}">${escape(r.device)}${D.modelOf(r) === "conflict" ? '<small class="identity-warning">身份冲突</small>' : ""}</td><td>${escape(r.channel)}</td><td>${escape(D.beijing(r.time))}</td><td>${number(r.sampleCount)}</td>` +
+      `<td title="${escape(r.deviceId)}">${escape(D.deviceLabel(r))}${D.boardOf(r.device) ? `<small class="board-meta">${escape(D.boardOf(r.device).id)} · 配置 MAC ${escape(D.boardOf(r.device).mac)}</small>` : ""}${D.modelOf(r) === "conflict" ? '<small class="identity-warning">身份冲突</small>' : ""}</td><td>${escape(r.channel)}</td><td>${escape(D.beijing(r.time))}</td><td>${number(r.sampleCount)}</td>` +
       D.fields.map((key) => `<td${key === "meanOhm" ? ' class="value"' : ""}>${number(r[key])}</td>`).join("") + `<td>${escape(r.seq === "" ? "—" : r.seq)}</td></tr>`).join("") :
       `<tr><td colspan="11" class="muted">${modelRows().length ? "当前型号在此筛选范围内没有记录，可重置本型号筛选。" :
         state.model === "unclassified" ? "没有身份待核对的本机记录。" : `${state.model} 暂无本机记录。请刷新云端；若串口显示 MQTT 成功但仍无数据，请确认该设备的“设备消息上报”归档规则已启动。另一型号的数据不会显示在此处。`}</td></tr>`;
@@ -131,7 +150,7 @@
   async function loadCloud() {
     const requestedModel = state.model, objects = new Map(), pending = [PREFIX], visited = new Set();
     let page = 0;
-    const relevantKey = (key) => requestedModel === "unclassified" || D.objectModel(key) === "unknown" || D.objectModel(key) === requestedModel;
+    const relevantKey = (key) => DUAL_PAGE || requestedModel === "unclassified" || D.objectModel(key) === "unknown" || D.objectModel(key) === requestedModel;
     // 根目录保留旧版平铺文件，同时递归读取当前型号和未标明型号的历史目录；不设置“最新N条”上限。
     while (pending.length) {
       const prefix = pending.shift(); if (visited.has(prefix)) continue; visited.add(prefix);

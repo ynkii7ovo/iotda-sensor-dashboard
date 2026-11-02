@@ -8,6 +8,17 @@
   const fields = ["meanOhm", "medianOhm", "minOhm", "maxOhm", "stdOhm"];
   const wireFields = ["mean_ohm", "median_ohm", "min_ohm", "max_ohm", "std_ohm"];
   const metricLabels = ["均值(Ω)", "中位数(Ω)", "最小值(Ω)", "最大值(Ω)", "标准差(Ω)"];
+  // 仅映射此双板工程的明确身份；蓝牙名称、上传 id 与配置 MAC 是不同字段。
+  const boards = {
+    "ER81C-EE": { id: "ER81C-EE", name: "ER61C_EE", mac: "98:DA:20:0E:5B:EE" },
+    "ER81C-EF": { id: "ER81C-EF", name: "ER81C_EF", mac: "98:DA:20:0E:5B:EF" }
+  };
+  function boardOf(value) {
+    const text = String(value || "").toUpperCase();
+    return Object.values(boards).find((b) => [b.id, b.name, b.mac].includes(text)) || null;
+  }
+  function entity(row) { return boardOf(row.device) ? `${row.deviceId}|${boardOf(row.device).id}` : row.deviceId; }
+  function deviceLabel(row) { return boardOf(row.device)?.name || row.device; }
   const finite = (value) => value === null || value === undefined || String(value).trim() === "" ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
   function dateOf(value) {
     if (value instanceof Date) return Number.isNaN(+value) ? null : new Date(value);
@@ -33,15 +44,20 @@
     return text.match(/((?:ER21T|ER81C)[-_]\d+)$/i)?.[1].replace("_", "-").toUpperCase() || text;
   }
   function deviceModel(value) {
+    if (boardOf(value) || /(?:^|_)ER81C-DUAL-\d+$/i.test(String(value))) return "ER81C";
     return String(value || "").match(/(?:^|_)(ER21T|ER81C)[-_]\d+$/i)?.[1].toUpperCase() || "unknown";
   }
   function modelOf(row) {
     const cloud = deviceModel(row.deviceId || row.device_id), board = deviceModel(row.device);
     if (row.identityIssue || cloud !== "unknown" && board !== "unknown" && cloud !== board) return "conflict";
+    if (boardOf(row.device)) return "ER81C-DUAL";
+    // 双板网关必须有明确的板卡 id；不能把网关自身当作一块单板。
+    if (/(?:^|_)ER81C-DUAL-\d+$/i.test(String(row.deviceId || row.device_id))) return "conflict";
     return cloud !== "unknown" ? cloud : board;
   }
   // 目录名只用于缩小下载范围，不能替代消息内的设备身份。
   function objectModel(key) {
+    if (/(?:^|[/_])ER81C-DUAL(?=[-_/])/i.test(String(key))) return "ER81C-DUAL";
     return String(key).match(/(?:^|[/_])(ER21T|ER81C)(?=[-_/])/i)?.[1].toUpperCase() || "unknown";
   }
   function matchesModel(row, model) {
@@ -61,6 +77,8 @@
       seq: row.seq ?? row.sample_seq ?? "", messageId: String(row.messageId || row.message_id || ""),
       sourceKey: String(row.sourceKey || row.source_key || ""), unit: "ohm" };
     record.model = modelOf(record);
+    const board = boardOf(device);
+    if (board) { record.boardId = board.id; record.bleName = board.name; record.configuredMac = board.mac; }
     fields.forEach((key, i) => { record[key] = finite(row[key] ?? row[wireFields[i]]); });
     // n=0 是未采样，不能把原始占位值显示为测得的0Ω。
     if (record.sampleCount === 0) fields.forEach((key) => { record[key] = null; });
@@ -68,8 +86,10 @@
     return record;
   }
   function identity(row) {
-    return [row.sourceKey || "local", row.deviceId, row.channel, +row.time, row.seq, row.messageId,
+    const legacy = [row.sourceKey || "local", row.deviceId, row.channel, +row.time, row.seq, row.messageId,
       row.sampleCount, ...fields.map((key) => row[key] ?? "null")].join("|");
+    // 旧记录的主键保持不变；同一网关的 EE / EF 即使数值和时间相同也不会覆盖。
+    return boardOf(row.device) ? `${legacy}|board:${boardOf(row.device).id}` : legacy;
   }
   function unique(rows) {
     const map = new Map(); rows.forEach((row) => { const item = normalise(row); if (item) map.set(identity(item), item); });
@@ -160,9 +180,9 @@
     return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${String(new Date(time).getMilliseconds()).padStart(3, "0")}`;
   }
   function csv(rows) {
-    const headers = ["北京时间", "设备", "设备ID", "通道", "样本数", ...metricLabels, "序号", "消息ID", "来源对象", "单位", "型号", "身份问题"];
+    const headers = ["北京时间", "设备", "设备ID", "通道", "样本数", ...metricLabels, "序号", "消息ID", "来源对象", "单位", "型号", "身份问题", "板卡ID", "蓝牙名称", "配置MAC"];
     const cells = [headers, ...rows.map((r) => [beijing(r.time), r.device, r.deviceId, r.channel, r.sampleCount,
-      ...fields.map((key) => r[key]), r.seq, r.messageId, r.sourceKey, "ohm", modelOf(r), r.identityIssue || ""])];
+      ...fields.map((key) => r[key]), r.seq, r.messageId, r.sourceKey, "ohm", modelOf(r), r.identityIssue || "", boardOf(r.device)?.id || "", boardOf(r.device)?.name || "", boardOf(r.device)?.mac || ""])];
     const quoted = (cell) => {
       let text = String(cell ?? "");
       // 对外部设备名/来源文本防止Excel公式注入；合法负数测量仍保留数值。
@@ -172,7 +192,7 @@
     return "sep=,\r\n" + cells.map((row) => row.map(quoted).join(",")).join("\r\n");
   }
   function filter(rows, options = {}) {
-    let result = rows.filter((r) => matchesModel(r, options.model) && (!options.device || options.device === "__all__" || r.deviceId === options.device) &&
+    let result = rows.filter((r) => matchesModel(r, options.model) && (!options.device || options.device === "__all__" || entity(r) === options.device) &&
       (!options.channels?.length || options.channels.includes(r.channel)));
     const from = dateOf(options.from), to = dateOf(options.to);
     if (from || to) result = result.filter((r) => (!from || +r.time >= +from) && (!to || +r.time <= +to + (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(options.to) ? 59999 : 0)));
@@ -183,5 +203,5 @@
     }
     return result.sort((a, b) => +a.time - +b.time || a.device.localeCompare(b.device) || a.channel.localeCompare(b.channel));
   }
-  return { fields, wireFields, finite, dateOf, normalise, identity, unique, parse, parseCsv, parseText, beijing, csv, filter, deviceModel, modelOf, objectModel, matchesModel };
+  return { fields, wireFields, finite, dateOf, normalise, identity, unique, parse, parseCsv, parseText, beijing, csv, filter, deviceModel, modelOf, objectModel, matchesModel, boardOf, entity, deviceLabel };
 });
